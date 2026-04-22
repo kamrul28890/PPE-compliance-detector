@@ -18,11 +18,18 @@ ANNOTATION_KEYS = ("objects", "annotations", "boxes", "bboxes", "labels")
 LABEL_KEYS = ("label", "class", "category", "category_id", "name")
 
 
+def _first_present(mapping: dict[str, Any], keys: tuple[str, ...]) -> Any:
+    for key in keys:
+        if key in mapping and mapping[key] is not None:
+            return mapping[key]
+    return None
+
+
 @dataclass(frozen=True)
 class DatasetConfig:
     dataset_name: str = "keremberke/hard-hat-detection"
     dataset_config: str = "full"
-    splits: tuple[str, ...] = ("train", "valid", "test")
+    splits: tuple[str, ...] = ("train", "validation", "test")
     sample_size: int = 500
     seed: int = 42
 
@@ -61,7 +68,7 @@ def _extract_boxes_and_labels(example: dict[str, Any], annotation_key: str):
 
     if isinstance(annotation_value, dict):
         boxes_source = annotation_value.get("bboxes") or annotation_value.get("boxes") or annotation_value.get("bbox")
-        labels_source = annotation_value.get("labels") or annotation_value.get("classes") or annotation_value.get("category_id")
+        labels_source = _first_present(annotation_value, ("labels", "classes", "category", "category_id"))
         if boxes_source is not None and labels_source is not None:
             for box, label in zip(boxes_source, labels_source):
                 boxes.append(list(map(float, box)))
@@ -72,7 +79,7 @@ def _extract_boxes_and_labels(example: dict[str, Any], annotation_key: str):
         for item in annotation_value:
             if isinstance(item, dict):
                 box = item.get("bbox") or item.get("box") or item.get("coordinates")
-                label = item.get("label") or item.get("class") or item.get("category") or item.get("category_id")
+                label = _first_present(item, LABEL_KEYS)
                 if box is not None and label is not None:
                     boxes.append(list(map(float, box)))
                     labels.append(label)
@@ -80,6 +87,17 @@ def _extract_boxes_and_labels(example: dict[str, Any], annotation_key: str):
             return boxes, labels
 
     raise ValueError(f"Could not extract bounding boxes from annotation value: {annotation_value!r}")
+
+
+def _label_name(features: Any, annotation_key: str, label: str | int) -> str:
+    try:
+        annotation_feature = features[annotation_key].feature
+        category_feature = annotation_feature["category"]
+        if hasattr(category_feature, "names") and category_feature.names:
+            return str(category_feature.names[int(label)])
+    except Exception:
+        pass
+    return str(label)
 
 
 def _normalize_box(box: list[float], image_width: int, image_height: int):
@@ -112,32 +130,33 @@ def prepare_yolo_dataset(output_dir: str | Path, config: DatasetConfig | None = 
 
     for split in config.splits:
         dataset = _load_split(config.dataset_name, config.dataset_config, split, config.sample_size, config.seed)
+        output_split = "valid" if split == "validation" else split
         example = dataset[0]
         image_key = _pick_key(example, IMAGE_KEYS)
         annotation_key = _pick_key(example, ANNOTATION_KEYS)
 
-        split_image_dir = images_root / split
-        split_label_dir = labels_root / split
+        split_image_dir = images_root / output_split
+        split_label_dir = labels_root / output_split
         split_image_dir.mkdir(parents=True, exist_ok=True)
         split_label_dir.mkdir(parents=True, exist_ok=True)
 
         for index, row in enumerate(dataset):
             image = _decode_image(row[image_key])
-            image_path = split_image_dir / f"{split}_{index:05d}.jpg"
+            image_path = split_image_dir / f"{output_split}_{index:05d}.jpg"
             image.save(image_path, quality=95)
 
             boxes, labels = _extract_boxes_and_labels(row, annotation_key)
-            label_path = split_label_dir / f"{split}_{index:05d}.txt"
+            label_path = split_label_dir / f"{output_split}_{index:05d}.txt"
             with label_path.open("w", encoding="utf-8") as handle:
                 for box, label in zip(boxes, labels):
-                    class_name = str(label)
+                    class_name = _label_name(dataset.features, annotation_key, label)
                     class_names.add(class_name)
                     normalized_box = _normalize_box(box, image.width, image.height)
                     handle.write(f"{class_name} {' '.join(f'{value:.6f}' for value in normalized_box)}\n")
 
             rows.append(
                 {
-                    "split": split,
+                    "split": output_split,
                     "image_path": str(image_path),
                     "label_path": str(label_path),
                     "bbox_count": len(boxes),

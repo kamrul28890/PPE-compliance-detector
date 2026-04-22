@@ -10,7 +10,16 @@ import pandas as pd
 def _format_table(rows: list[dict[str, Any]]) -> str:
     if not rows:
         return "No rows recorded."
-    return pd.DataFrame(rows).to_markdown(index=False, floatfmt=".3f")
+    frame = pd.DataFrame(rows)
+    frame = frame.map(lambda value: f"{value:.3f}" if isinstance(value, float) else str(value))
+    headers = list(frame.columns)
+    table = [
+        "| " + " | ".join(headers) + " |",
+        "| " + " | ".join("---" for _ in headers) + " |",
+    ]
+    for row in frame.itertuples(index=False):
+        table.append("| " + " | ".join(str(value) for value in row) + " |")
+    return "\n".join(table)
 
 
 def write_report(report_path: str | Path, context: dict[str, Any]) -> Path:

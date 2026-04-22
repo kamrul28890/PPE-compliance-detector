@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pandas as pd
 
-from .bayes import score_detection_counts
 from .dataset import DatasetConfig, prepare_yolo_dataset
 from .reporting import write_report
 from .training import evaluate_yolo_detector, train_yolo_detector
@@ -39,6 +38,8 @@ def command_evaluate_yolo(_: argparse.Namespace) -> None:
 
 
 def command_score_sample(_: argparse.Namespace) -> None:
+    from .bayes import score_detection_counts
+
     result = score_detection_counts(hardhat_count=1, no_hardhat_count=1, person_count=2)
     payload = {
         "compliance_probability": result.compliance_probability,
